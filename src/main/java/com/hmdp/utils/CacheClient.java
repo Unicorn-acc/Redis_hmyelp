@@ -29,10 +29,12 @@ public class CacheClient {
         this.stringRedisTemplate = stringRedisTemplate;
     }
 
+    //方法1：将任意Java对象序列化为json并存储在string类型的key中，并且可以设置TTL过期时间
     public void set(String key, Object value, Long time, TimeUnit unit) {
         stringRedisTemplate.opsForValue().set(key, JSONUtil.toJsonStr(value), time, unit);
     }
 
+    //方法2：将任意Java对象序列化为json并存储在string类型的key中，并且可以设置逻辑过期时间，用于处理缓存击穿问题
     public void setWithLogicalExpire(String key, Object value, Long time, TimeUnit unit) {
         // 设置逻辑过期
         RedisData redisData = new RedisData();
@@ -42,6 +44,18 @@ public class CacheClient {
         stringRedisTemplate.opsForValue().set(key, JSONUtil.toJsonStr(redisData));
     }
 
+    /**
+     * 方法3：根据指定的key查询缓存，并反序列化为指定类型，利用缓存空值的方式解决缓存穿透问题
+     * @param keyPrefix id前缀
+     * @param id    id值
+     * @param type  查询到的数据具体是什么类型
+     * @param dbFallback    回调函数，将方法交给调用者进行实现并返回结果【函数式编程】（根据id查询数据库）
+     * @param time  设置缓存时间
+     * @param unit  缓存时间的单位
+     * @param <R>   使用的具体类型
+     * @param <ID>  存放的key_id
+     * @return
+     */
     public <R,ID> R queryWithPassThrough(
             String keyPrefix, ID id, Class<R> type, Function<ID, R> dbFallback, Long time, TimeUnit unit){
         String key = keyPrefix + id;
@@ -72,6 +86,18 @@ public class CacheClient {
         return r;
     }
 
+    /**
+     * 方法4：根据指定的key查询缓存，并反序列化为指定类型，需要利用逻辑过期解决缓存击穿问题
+     * @param keyPrefix id前缀
+     * @param id    id值
+     * @param type  查询到的数据具体是什么类型
+     * @param dbFallback    回调函数，将方法交给调用者进行实现并返回结果【函数式编程】（根据id查询数据库）
+     * @param time  设置缓存时间
+     * @param unit  缓存时间的单位
+     * @param <R>   使用的具体类型
+     * @param <ID>  存放的key_id
+     * @return
+     */
     public <R, ID> R queryWithLogicalExpire(
             String keyPrefix, ID id, Class<R> type, Function<ID, R> dbFallback, Long time, TimeUnit unit) {
         String key = keyPrefix + id;
@@ -79,7 +105,7 @@ public class CacheClient {
         String json = stringRedisTemplate.opsForValue().get(key);
         // 2.判断是否存在
         if (StrUtil.isBlank(json)) {
-            // 3.存在，直接返回
+            // 3.若缓存未命中，则直接返回
             return null;
         }
         // 4.命中，需要先把json反序列化为对象

@@ -292,7 +292,7 @@ public boolean preHandle(HttpServletRequest request, HttpServletResponse respons
 
 > 注意这里之所以要保存信息到ThreadLocal中，是为了后面在service中方便拿出使用，因为存在线程不安全问题，所以使用ThreadLocal保存
 
-## 2、商户查询缓存
+# 2、商户查询缓存
 
 > 店铺类型在很多地方都用到，为了提高查询效率，添加查询缓存，但与此同时，因为更新缓存和更新数据库的操作不是原子性的，可能会导致缓存和数据不一致问题
 
@@ -452,11 +452,11 @@ private Shop queryWithPassThrough(Long id){
 
 如果热点key失效，只运行一个线程去更新缓存，其他线程等更新好后再来获取
 
-![image-20220516102952256](https://img-blog.csdnimg.cn/img_convert/6f1194fedcac27ee6eb505661cb39587.png)
+<img src="https://img-blog.csdnimg.cn/img_convert/6f1194fedcac27ee6eb505661cb39587.png" width="500">
 
 流程分析：
 
-![image-20220516103138696](https://img-blog.csdnimg.cn/img_convert/0d8450aab0b215bdfb60a5f3b91ffe85.png)
+![image-20220516103138696](https://img-blog.csdnimg.cn/img_convert/0d8450aab0b215bdfb60a5f3b91ffe85.png)<img src="https://img-blog.csdnimg.cn/img_convert/0d8450aab0b215bdfb60a5f3b91ffe85.png" width="500">
 
 代码实现：
 
@@ -591,7 +591,7 @@ public <R, ID> R queryWithMutex(
 
 ![image-20220516104936500](https://img-blog.csdnimg.cn/img_convert/7627fa67a0e2243d957c8513522c5893.png)
 
-## 3、优惠劵秒杀
+# 3、优惠劵秒杀
 
 ### 全局唯一ID
 
@@ -853,7 +853,7 @@ return 0
 123456
 ```
 
-### 5、分布式锁-Redission
+# 5、分布式锁-Redission
 
 基于setnx实现的分布式锁存在下面的问题
 
@@ -866,7 +866,7 @@ Redisson是一个在Redis的基础上实现的Java驻内存数据网格（In-Mem
 
 ![image-20220516213851729](https://img-blog.csdnimg.cn/img_convert/1ed71674a48578d0ea501dc508dd5898.png)
 
-### 6、Redis优化秒杀
+# 6、Redis优化秒杀
 
 ![image-20220518202549208](https://img-blog.csdnimg.cn/img_convert/b10907670e749676ac6aa88029cbec90.png)
 
@@ -981,7 +981,7 @@ private BlockingQueue<VoucherOrder> orderTasks = new ArrayBlockingQueue<>(1024 *
 - 内存限制问题
 - 数据安全问题
 
-### 7、Redis消息队列实现异步秒杀
+# 7、Redis消息队列实现异步秒杀
 
 消息队列（Message Queue），字面意思就是存放消息的队列。最简单的消息队列模型包括3个角色：
 
@@ -1313,7 +1313,7 @@ private class VoucherOrderHandler implements Runnable {
 123456789101112131415161718192021222324252627282930313233343536373839404142434445464748495051525354555657585960
 ```
 
-## 8、达人探店
+# 8、达人探店
 
 ### 点赞
 
@@ -1456,7 +1456,7 @@ public Result queryBlogLikes(Long id) {
 
 > 一定要注意这里的第三步，拿到排序好的id后，再去数据库查询对应的其他信息时。如果使用in的话，后面返回的数据顺序并不是我们一开始的id的顺序。所以这里我们查询数据库时，使用order by field按照我们指定的顺序进行排序
 
-## 9、好友关注
+# 9、好友关注
 
 在探店图文的详情页面中，可以关注发布笔记的作者
 
@@ -1742,7 +1742,7 @@ public Result queryBlogOfFollow(Long max, Integer offset) {
 123456789101112131415161718192021222324252627282930313233343536373839404142434445464748
 ```
 
-## 10、附近商户
+# 10、附近商户
 
 在首页中点击某个频道，即可看到频道下的商户，现在需要显示附近的商户，并且可以现在距离当前位置的距离。
 
@@ -1890,7 +1890,7 @@ void loadShopData() {
 123456789101112131415161718192021222324252627282930313233343536373839404142434445464748495051525354
 ```
 
-## 11、用户签到
+# 11、用户签到
 
 假如我们用一张表来存储用户签到信息，其结构应该如下：
 
@@ -2014,7 +2014,7 @@ public Result signCount() {
 1234567891011121314151617181920212223242526272829303132333435363738394041
 ```
 
-## 12、UV统计
+# 12、UV统计
 
 ### HyperLogLog用法
 
