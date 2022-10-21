@@ -34,18 +34,17 @@ public class SimpleRedisLock implements ILock {
         // 获取锁
         Boolean success = stringRedisTemplate.opsForValue()
                 .setIfAbsent(KEY_PREFIX + name, threadId, timeoutSec, TimeUnit.SECONDS);
-        return Boolean.TRUE.equals(success);
+        return Boolean.TRUE.equals(success);//直接返回success有安全风险，如果返回null就空指针了
     }
 
-    @Override
-    public void unlock() {
-        // 调用lua脚本
-        stringRedisTemplate.execute(
-                UNLOCK_SCRIPT,
-                Collections.singletonList(KEY_PREFIX + name),
-                ID_PREFIX + Thread.currentThread().getId());
-    }
-    /*@Override
+//    @Override
+//    public void unlock() {
+//        // 调用lua脚本
+//        stringRedisTemplate.execute(
+//                UNLOCK_SCRIPT,
+//                Collections.singletonList(KEY_PREFIX + name),
+//                ID_PREFIX + Thread.currentThread().getId());
+//    }
     public void unlock() {
         // 获取线程标示
         String threadId = ID_PREFIX + Thread.currentThread().getId();
@@ -56,5 +55,5 @@ public class SimpleRedisLock implements ILock {
             // 释放锁
             stringRedisTemplate.delete(KEY_PREFIX + name);
         }
-    }*/
+    }
 }

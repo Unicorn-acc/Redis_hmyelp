@@ -168,7 +168,25 @@ session的替代方案应该满足：①数据共享 ②内存存储 ③key、va
 - 选择合适的存储粒度
 
 
-## 缓存
+## 2、缓存
+
+**目录：**
+
+1、什么是缓存
+
+2、添加Redis缓存
+
+3、缓存更新策略
+
+4、缓存穿透
+
+5、缓存雪崩
+
+6、缓存击穿
+
+7、缓存工具类封装
+
+---
 
 缓存就是数据交换的缓冲区Cache，是存储数据的临时地方，**一般读写性能较高**。
 
@@ -193,9 +211,9 @@ session的替代方案应该满足：①数据共享 ②内存存储 ③key、va
 
 **主动更新：**我们可以手动调用方法把缓存删掉，通常用于解决缓存和数据库不一致问题![img](https://img-blog.csdnimg.cn/5d48f0ec62414cfb9e6f1290f759cdc5.png)
 
-**主动更新策略**
+**主动更新的方案**
 
-1. Cache Aside Pattern
+1. **Cache Aside Pattern**
 
    由缓存的调用者，在更新数据库的同时更新缓存
 
@@ -302,14 +320,25 @@ session的替代方案应该满足：①数据共享 ②内存存储 ③key、va
 
 缓存击穿问题也叫热点Key问题，就是一个被**高并发访问**并且**缓存重建业务较复杂**的key**突然失效了**，无数的请求访问会在瞬间给数据库带来巨大的冲击。
 
-> 逻辑分析：假设线程1在查询缓存之后，本来应该去查询数据库，然后把这个数据重新加载到缓存的，此时只要线程1走完这个逻辑，其他线程就都能从缓存中加载这些数据了，但是假设在线程1没有走完的时候，后续的线程2，线程3，线程4同时过来访问当前这个方法， 那么这些线程都不能从缓存中查询到数据，那么他们就会同一时刻来访问查询缓存，都没查到，接着同一时间去访问数据库，同时的去执行数据库代码，对数据库访问压力过大
+**常见的解决方案有两种：（案例：查询商铺信息）**
+
+1、**互斥锁**（P44，很细，多看`ShopServiceImpl.queryWithMutex`）
+
+- 思路：给缓存重建过程加锁，确保重建过程只有一个线程执行，其他线程等待
+- 优点：①实现简单、②没有额外内存消耗、③一致性好
+- 缺点：①等待导致性能下降、②有死锁风险
+
+2、**逻辑过期**（`ShopServiceImpl.queryWithLogicalExpire`）
+
+- 思路：热点key缓存永不过期，而是设置一个逻辑过期时间，查询到数据时通过对逻辑过期时间判断，来决定是否需要重建缓存（①重建缓存也通过互斥锁保证单线程执行、②重建缓存利用独立线程异步执行、③其他线程无需等待，直接查询到旧数据返回即可）
+- 优点：①线程无需等待，性能较好
+- 缺点：①不保证一致性、②有额外内存消耗、③实现复杂
+
+
+
+> 问题逻辑分析：假设线程1在查询缓存之后，本来应该去查询数据库，然后把这个数据重新加载到缓存的，此时只要线程1走完这个逻辑，其他线程就都能从缓存中加载这些数据了，但是假设在线程1没有走完的时候，后续的线程2，线程3，线程4同时过来访问当前这个方法， 那么这些线程都不能从缓存中查询到数据，那么他们就会同一时刻来访问查询缓存，都没查到，接着同一时间去访问数据库，同时的去执行数据库代码，对数据库访问压力过大
 
 ![img](https://img-blog.csdnimg.cn/d9294a5cfd6743e9b3a084d3a76a8bd4.png)
-
-常见的解决方案有两种：（案例：查询商铺信息）
-
-- 互斥锁（P44，很细，多看`ShopServiceImpl.queryWithMutex`）
-- 逻辑过期（`ShopServiceImpl.queryWithLogicalExpire`）
 
 **解决方案一、使用互斥锁来解决**
 
@@ -331,7 +360,7 @@ session的替代方案应该满足：①数据共享 ②内存存储 ③key、va
 
 <img src="https://img-blog.csdnimg.cn/ecc9bad176d04450b3eae7e62474e346.png" width="500">
 
-两种解决方案对比：
+**两种解决方案对比：**
 
 ​	**互斥锁方案：**由于保证了互斥性，所以数据一致，且实现简单，因为仅仅只需要加一把锁而已，也没其他的事情需要操心，所以没有额外的内存消耗，缺点在于有锁就有死锁问题的发生，且只能串行执行性能肯定受到影响
 
@@ -367,3 +396,311 @@ session的替代方案应该满足：①数据共享 ②内存存储 ③key、va
 
 - 方法3：根据指定的key查询缓存，并反序列化为指定类型，利用缓存空值的方式解决缓存穿透问题
 - 方法4：根据指定的key查询缓存，并反序列化为指定类型，需要利用逻辑过期解决缓存击穿问题
+
+## 3、优惠券秒杀(锁！！)
+
+**目录：**
+
+1、全局唯一ID
+
+2、实现优惠券秒杀下单
+
+3、超卖问题
+
+4、一人一单
+
+5、分布式锁
+
+6、Redis优化秒杀
+
+7、Redis消息队列实现异步秒杀
+
+
+
+### 全局唯一ID(基于Redis自增)
+
+每个店铺都可以发布优惠券，当用户抢购时，就会生成订单并保存到tb_voucher_order这张表中，而订单表如果使用数据库自增ID就存在一些问题：
+
+- id的规律性太明显
+- 受单表数据量的限制
+
+> 场景分析：如果我们的id具有太明显的规则，用户或者说商业对手很容易猜测出来我们的一些敏感信息，比如商城在一天时间内，卖出了多少单，这明显不合适。
+>
+> 场景分析二：随着我们商城规模越来越大，mysql的单表的容量不宜超过500W，数据量过大之后，我们要进行拆库拆表，但拆分表了之后，他们从逻辑上讲他们是同一张表，所以他们的id是不能一样的， 于是乎我们需要保证id的唯一性。
+
+**全局ID生成器**，是一种在分布式系统下用来生成**全局唯一ID**的工具，一般要满足下列特性：
+
+<img src="https://img-blog.csdnimg.cn/3b89d9289cb944b49f33c05021b18a58.png" width="500">
+
+ 为了增加ID的安全性，不要直接使用Redis自增的数值，而是拼接一些其它信息： ![img](https://img-blog.csdnimg.cn/470ad5d5afac49e39e9be57ff346986d.png)
+
+ID的组成部分：符号位：1bit，永远为0
+
+时间戳：31bit，以秒为单位，可以使用69年
+
+序列号：32bit，秒内的计数器，支持每秒产生2^32个不同ID
+
+#### 线程池测试生成唯一ID
+
+`long count = stringRedisTemplate.opsForValue().increment("icr:" + keyPrefix + ":" + date);`
+
+```java
+@Resource
+private RedisIdWorker redisIdWorker;
+
+private ExecutorService es = Executors.newFixedThreadPool(500);
+
+@Test
+void TestIdWorker() throws Exception{
+    CountDownLatch latch = new CountDownLatch(300);
+    Runnable task = () -> {
+        for(int i = 0; i < 100; i++){
+            long id = redisIdWorker.nextId("order");
+            System.out.println("id = " + id);
+        }
+        latch.countDown();
+    };
+    long begin = System.currentTimeMillis();
+    for(int i = 0; i < 300; i++){
+        es.submit(task);
+    }
+    latch.await();
+    long end = System.currentTimeMillis();
+    System.out.println("time = " + (end-begin));//time = 3218
+}
+
+public long nextId(String keyPrefix) {
+        // 1.生成时间戳
+        LocalDateTime now = LocalDateTime.now();
+        long nowSecond = now.toEpochSecond(ZoneOffset.UTC);
+        long timestamp = nowSecond - BEGIN_TIMESTAMP;
+
+        // 2.生成序列号
+        // 2.1.获取当前日期，精确到天
+        String date = now.format(DateTimeFormatter.ofPattern("yyyy:MM:dd"));
+        // 2.2.自增长
+        long count = stringRedisTemplate.opsForValue().increment("icr:" + keyPrefix + ":" + date);
+
+        // 3.拼接并返回
+        return timestamp << COUNT_BITS | count;
+    }
+```
+
+---
+
+**总结：**
+
+**全局唯一ID生成策略：**
+
+- UUID
+- Redis自增
+- snowflake算法
+- 数据库自增
+
+**Redis自增ID策略：** 
+
+- 每天一个key，方便统计订单量
+- ID构造是 **时间戳+计数器**一ID生成策略：
+
+### 乐观锁悲观锁
+
+**悲观锁**
+
+认为线程安全问题一定会发生，因此 在操作数据之前先获取锁，确保线程 串行执行。例如synchronized、Lock都属于悲观锁。
+
+> 优点：简单粗暴
+>
+> 缺点：性能一般
+
+
+
+**乐观锁**
+
+认为线程安全问题不一定会发生，因 此不加锁，只是在更新数据时去判断 有没有其它线程对数据做了修改。
+
+◆ 如果没有修改则认为是安全的，自 己才更新数据。
+
+◆ 如果已经被其它线程修改说明发生 了安全问题，此时可以重试或异常。
+
+1. 版本号法
+
+   ![image-20220516210403193](https://img-blog.csdnimg.cn/img_convert/d6abecb0a451903cdc8378e57f17573b.png)
+
+   > 需要增加一个版本号字段，如果修改了的话就增加1
+
+   ![image-20220516210114906](https://img-blog.csdnimg.cn/img_convert/6613deaccf8f969525dccd310f0f9c28.png)
+
+2. CAS法
+
+   > 扣减前获取库存量，调用sql扣减时判断此时库存是否等于前面查到的库存，如果没有变化就是没有人修改过
+
+   ![image-20220516210633910](https://img-blog.csdnimg.cn/img_convert/0968c3fdc9f5bc5f468777d857deff69.png)
+
+> 性能好，但适合读多写少的情况，这种秒杀的情况，读跟写差不多的话使用CAS就回导致成功率低
+
+
+
+**mysql的排他锁**
+
+只需要在更新时判断此时库存是否大于0
+
+```
+update goods set stock = stock - 1 WHERE id = 1001 and stock > 0
+```
+
+使用update时会加排他锁，这一行不能被任何其他线程修改和读写
+
+排他锁又称为写锁，简称X锁，顾名思义，排他锁就是不能与其他所并存，如一个事务获取了一个数据行的排他锁，其他事务就不能再获取该行的其他锁，包括共享锁和排他锁，但是获取排他锁的事务是可以对数据就行读取和修改。
+
+**乐观锁和悲观锁总结：**
+
+![img](https://img-blog.csdnimg.cn/c2265fad71774ea0b38accdd27623a10.png)
+
+
+
+#### 超卖问题分析（乐观锁解决）
+
+优惠券秒杀属于高并发操作，存在库存超卖问题。--`VoucherOrderServiceImpl.seckkillVoucher`
+
+超卖问题是典型的多线程安全问题，针对这一问题的常见解决方案就是加锁。
+
+
+
+解决方案：
+
+只需要在更新时判断此时库存是否大于0
+
+```
+update goods set stock = stock - 1 WHERE id = 1001 and stock > 0
+```
+
+使用update时会加排他锁，这一行不能被任何其他线程修改和读写
+
+
+
+#### 一人一单问题
+
+##### 单机情况下（悲观锁解决）
+
+需求：修改秒杀业务，要求同一个优惠券，一个用户只能下一单
+
+具体操作逻辑如下：比如时间是否充足，如果时间充足，则进一步判断库存是否足够，然后再根据优惠卷id和用户id查询是否已经下过这个订单，如果下过这个订单，则不再下单，否则进行下单
+
+![img](https://img-blog.csdnimg.cn/50b2bd8cc8914edcb4a80df7cebee5b1.png)
+
+**存在问题：**现在的问题还是和之前一样，**并发过来，查询数据库，都不存在订单**，所以我们还是需要加锁，但是**乐观锁比较适合更新数据，而现在是插入数据，所以我们需要使用悲观锁操作**
+
+**	注意：**在这里提到了非常多的问题，我们需要慢慢的来思考，首先我们的初始方案是封装了一个createVoucherOrder方法，同时为了确保他线程安全，添加了一把synchronized 锁
+
+intern() 这个方法是从常量池中拿到数据，如果我们直接使用userId.toString() 他拿到的对象实际上是不同的对象，new出来的对象，我们使用锁必须保证锁必须是同一把，所以我们需要使用intern()方法
+
+
+
+但是以上代码还是存在问题，**问题的原因在于当前方法被spring的事务控制，如果你在方法内部加锁，可能会导致当前方法事务还没有提交，但是锁已经释放也会导致问题**，所以我们选择将当前方法整体包裹起来，确保事务不会出现问题：如下：
+
+在seckillVoucher 方法中，添加以下逻辑，这样就能保证事务的特性，同时也控制了锁的粒度
+
+```java
+Long userId = UserHolder.getUser().getId();
+synchronized (userId.toString().intern()){
+    return this.createVoucherOrder(voucherId);
+}
+```
+
+ 但是以上做法依然有问题，因为你调用的方法，其实是this.的方式调用的**，事务想要生效，还得利用代理来生效，所以这个地方，我们需要获得原始的事务对象， 来操作事务 。**
+
+为了实现以上创建代理对象，需要引用aspectj相关依赖，并在主启动类添加相应注解`@EnableAspectJAutoProxy(exposeProxy = true)`。
+
+        <dependency>
+            <groupId>org.aspectj</groupId>
+            <artifactId>aspectjweaver</artifactId>
+        </dependency>
+```java
+@EnableAspectJAutoProxy(exposeProxy = true)
+@MapperScan("com.hmdp.mapper")
+@SpringBootApplication
+public class HmDianPingApplication {
+ 
+    public static void main(String[] args) {
+        SpringApplication.run(HmDianPingApplication.class, args);
+    }
+}
+```
+
+##### 集群环境下（Redis实现分布式锁）
+
+##### 如何快速配置项目集群
+
+通过加锁可以解决在单机情况下的一人一单安全问题，但是在集群模式下就不行了。
+
+1、将服务启动两份，端口分别为8081和8082：<img src="https://img-blog.csdnimg.cn/7b5456edd708411bb40a10284a555646.png" width="500">
+
+ 
+
+2、然后修改nginx的conf目录下的nginx.conf文件，配置反向代理和负载均衡： ![img](https://img-blog.csdnimg.cn/77c0a65f4da54d3f9b5ba58b4a37c619.png)
+
+3.重启nginx可以在控制台执行nginx.exe -s reload命令，若不生效，则通过任务管理器将所有nginx服务都关闭 
+
+---
+
+**单机情况下**
+
+可以使用锁来保证并发安全
+
+<img src="https://img-blog.csdnimg.cn/img_convert/4ab78b3fc9736d1dd2aa175721c7b75a.png" width="450">
+
+ **分布式下**
+
+![image-20220516212333213](https://img-blog.csdnimg.cn/img_convert/780c9750d45a74ebae358abf42481937.png)
+
+> 分布式锁是由共享存储系统维护的变量，多个客户端可以向共享存储系统发送命令进行加 锁或释放锁操作。Redis 作为一个共享存储系统，可以用来实现分布式锁。
+
+**有关锁失效原因分析**
+
+​	由于现在我们部署了多个tomcat，每个tomcat都有一个属于自己的jvm，那么假设在服务器A的tomcat内部，有两个线程，这两个线程由于使用的是同一份代码，那么他们的锁对象是同一个，是可以实现互斥的，但是如果现在是服务器B的tomcat内部，又有两个线程，但是他们的锁对象写的虽然和服务器A一样，但是**锁对象却不是同一个**，所以线程3和线程4可以实现互斥，但是却无法和线程1和线程2实现互斥，这就是 集群环境下，syn锁失效的原因，在这种情况下，我们就需要使用分布式锁来解决这个问题。
+
+
+
+### 分布式锁
+
+分布式锁：满足分布式系统或集群模式下多进程可见并且互斥的锁。
+
+**分布式锁的核心思想**就是让大家都使用同一把锁，只要大家使用的是同一把锁，那么我们就能锁住线程，不让线程进行，让程序串行执行，这就是分布式锁的核心思路
+
+
+
+**分布式锁他应该满足一些什么样的条件？**
+
+- 可见性：多个线程都能看到相同的结果，注意：这个地方说的可见性并不是并发编程中指的内存可见性，只是说多个进程之间都能感知到变化的意思
+- 互斥：互斥是分布式锁的最基本的条件，使得程序串行执行
+- 高可用：程序不易崩溃，时时刻刻都保证较高的可用性
+- 高性能：由于加锁本身就让性能降低，所有对于分布式锁本身需要他就较高的加锁性能和释放锁性能
+- 安全性：安全也是程序中必不可少的一环
+
+
+
+**常见的分布式锁有三种**
+
+Mysql：mysql本身就带有锁机制，但是由于mysql性能本身一般，所以采用分布式锁的情况下，其实使用mysql作为分布式锁比较少见
+
+Redis：redis作为分布式锁是非常常见的一种使用方式，现在企业级开发中基本都使用redis或者zookeeper作为分布式锁，利用setnx这个方法，如果插入key成功，则表示获得到了锁，如果有人插入成功，其他人插入失败则表示无法获得到锁，利用这套逻辑来实现分布式锁
+
+Zookeeper：zookeeper也是企业级开发中较好的一个实现分布式锁的方案，由于本套视频并不讲解zookeeper的原理和分布式锁的实现，所以不过多阐述![img](https://img-blog.csdnimg.cn/e4de5eeccb3c4310b54cd3e8f182c2aa.png)
+
+#### 基于Redis实现分布式锁
+
+实现基于Redis分布式锁需要实现的两个基本方法
+
+<img src="https://img-blog.csdnimg.cn/22faaeb3f1c34ca68717a35f2dc66384.png" width="450">
+
+
+
+对于加锁操作，我们需要满足三个条件
+
+1. 加锁包括了读取锁变量、检查锁变量值和设置锁变量值三个操作，但需要以原子操作的 方式完成，所以，我们使用 SET 命令带上 NX 选项来实现加锁；
+2. 锁变量需要设置过期时间，以免客户端拿到锁后发生异常，导致锁一直无法释放，所 以，我们在 SET 命令执行时加上 EX/PX 选项，设置其过期时间；
+3. 锁变量的值需要能区分来自不同客户端的加锁操作，以免在释放锁时，出现误释放操 作，所以，我们使用 SET 命令设置锁变量值时，每个客户端设置的值是一个唯一值，用 于标识客户端。
+
+对于释放锁操作，需要注意
+
+释放锁包含了读取锁变量值、判断锁变量值和删除锁变量三个操作，我们无法使用单个命令来实现，所以，我们可以采用 Lua 脚本执行释放锁操作，通过 Redis 原子性地执行 Lua 脚本，来保证释放锁操作的原子性。
