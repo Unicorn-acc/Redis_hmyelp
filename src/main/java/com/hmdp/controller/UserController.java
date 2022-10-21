@@ -38,6 +38,7 @@ public class UserController {
      */
     @PostMapping("code")
     public Result sendCode(@RequestParam("phone") String phone, HttpSession session) {
+        //生成的验证码要放在session中
         return userService.sedCode(phone,session);
     }
 

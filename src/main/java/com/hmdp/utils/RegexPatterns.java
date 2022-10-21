@@ -1,6 +1,7 @@
 package com.hmdp.utils;
 
 /**
+ * 正则表达式进行各种校验
  * @author 虎哥
  */
 public abstract class RegexPatterns {
