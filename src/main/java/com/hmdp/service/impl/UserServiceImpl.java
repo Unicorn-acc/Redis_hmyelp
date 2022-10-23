@@ -98,6 +98,8 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements IU
         //7.保存用户信息到session
         //session.setAttribute("user",BeanUtil.copyProperties(user,UserDTO.class));
 
+        stringRedisTemplate.delete(code+phone);
+
         //TODO 7.保存用户信息到redis
         //TODO 7.1.随机生成Token，作为登录令牌
         String token = UUID.randomUUID().toString(true);

@@ -62,11 +62,12 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
 //
 //        TODO 使用工具类继续缓存处理
 //        TODO 1.利用缓存空值的方式解决缓存穿透问题
-//        Shop shop = cacheClient.queryWithPassThrough(
-//                CACHE_SHOP_KEY,id,Shop.class,this::getById,CACHE_SHOP_TTL,TimeUnit.MINUTES);
+        Shop shop = cacheClient.queryWithPassThrough(
+                CACHE_SHOP_KEY,id,Shop.class,this::getById,CACHE_SHOP_TTL,TimeUnit.MINUTES);
 //        TODO 2.逻辑过期解决缓存击穿
-        Shop shop = cacheClient.queryWithLogicalExpire(
-                CACHE_SHOP_KEY, id, Shop.class, this::getById, CACHE_SHOP_TTL, TimeUnit.MINUTES);
+//        TODO 热点商品缓存永不过期(需要手动初始key)，才可以继续使用逻辑过期方式解决缓存击穿
+//        Shop shop = cacheClient.queryWithLogicalExpire(
+//                CACHE_SHOP_KEY, id, Shop.class, this::getById, CACHE_SHOP_TTL, TimeUnit.MINUTES);
 
         return Result.ok(shop);
 

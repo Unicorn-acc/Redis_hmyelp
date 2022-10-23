@@ -20,13 +20,34 @@
 
 Redis各数据结构使用点：
 
-String：查询商铺：`ShopServiceImpl.queryById`
+String：
 
-Hash：登录验证通过后保存用户信息：`UserServiceImpl.login`
+- 查询商铺：`ShopServiceImpl.queryById`
 
-List：查询商铺类型：`ShopTypeServiceImpl.queryTypeList`
+Hash：
 
-# 技术点
+- 登录验证通过后保存用户信息：`UserServiceImpl.login`
+- 保存作为可重入锁的信息
+
+List：
+
+- 查询商铺类型：`ShopTypeServiceImpl.queryTypeList`
+
+​	作为消息队列使用：
+
+# Redis实战篇技术点
+
+缓存篇：
+
+缓存击穿、缓存雪崩、缓存穿透问题==>展示店铺列表+热点商品逻辑过期`ShopServiceImpl`
+
+锁篇：判断秒杀库存+校验一人一单==>`VoucherOrderServiceImpl`
+
+秒杀优化：同步处理秒杀太耗时，使用**异步**将判断用户资格和订单入库分开
+
+- VoucherOrderServiceImpl.seckkillVoucher
+
+
 
 ## ThreadLocal（线程隔离）
 
@@ -146,7 +167,7 @@ public class UserHolder {
 
 通过以上讲解，我们可以得知 每个用户其实对应都是去找tomcat线程池中的一个线程来完成工作的， 使用完成后再进行回收，既然每个请求都是独立的，所以在每个用户去访问我们的工程时，我们可以使用threadlocal来做到线程隔离，每个线程操作自己的一份数据
 
-## 集群的session共享问题
+### 集群的session共享问题
 
 session共享问题：多台Tomcat并不共享session存储空间，当请求切换到不同tomcat服务时导致数据丢失的问题。
 
@@ -330,7 +351,7 @@ session的替代方案应该满足：①数据共享 ②内存存储 ③key、va
 
 2、**逻辑过期**（`ShopServiceImpl.queryWithLogicalExpire`）
 
-- 思路：热点key缓存永不过期，而是设置一个逻辑过期时间，查询到数据时通过对逻辑过期时间判断，来决定是否需要重建缓存（①重建缓存也通过互斥锁保证单线程执行、②重建缓存利用独立线程异步执行、③其他线程无需等待，直接查询到旧数据返回即可）
+- 思路：<u>热点key缓存永不过期</u>，而是设置一个逻辑过期时间，查询到数据时通过对逻辑过期时间判断，来决定是否需要重建缓存（①重建缓存也通过互斥锁保证单线程执行、②重建缓存利用独立线程异步执行、③其他线程无需等待，直接查询到旧数据返回即可）
 - 优点：①线程无需等待，性能较好
 - 缺点：①不保证一致性、②有额外内存消耗、③实现复杂
 
@@ -520,7 +541,7 @@ public long nextId(String keyPrefix) {
 
 ◆ 如果没有修改则认为是安全的，自 己才更新数据。
 
-◆ 如果已经被其它线程修改说明发生 了安全问题，此时可以重试或异常。
+◆ 如果已经被其它线程修改说明发生了安全问题，此时可以重试或异常。
 
 1. 版本号法
 
@@ -627,9 +648,11 @@ public class HmDianPingApplication {
 }
 ```
 
-##### 集群环境下（Redis实现分布式锁）
+## 4、分布式锁
 
-##### 如何快速配置项目集群
+### 集群环境下（Redis实现分布式锁）
+
+#### 如何快速配置项目集群
 
 通过加锁可以解决在单机情况下的一人一单安全问题，但是在集群模式下就不行了。
 
@@ -661,7 +684,7 @@ public class HmDianPingApplication {
 
 
 
-### 分布式锁
+### 分布式锁基本原理和实现方式对比
 
 分布式锁：满足分布式系统或集群模式下多进程可见并且互斥的锁。
 
@@ -687,7 +710,7 @@ Redis：redis作为分布式锁是非常常见的一种使用方式，现在企�
 
 Zookeeper：zookeeper也是企业级开发中较好的一个实现分布式锁的方案，由于本套视频并不讲解zookeeper的原理和分布式锁的实现，所以不过多阐述![img](https://img-blog.csdnimg.cn/e4de5eeccb3c4310b54cd3e8f182c2aa.png)
 
-#### 基于Redis实现分布式锁
+### 基于Redis实现分布式锁
 
 实现基于Redis分布式锁需要实现的两个基本方法
 
@@ -695,12 +718,659 @@ Zookeeper：zookeeper也是企业级开发中较好的一个实现分布式锁�
 
 
 
-对于加锁操作，我们需要满足三个条件
+#### 实现分布式锁版本一
 
-1. 加锁包括了读取锁变量、检查锁变量值和设置锁变量值三个操作，但需要以原子操作的 方式完成，所以，我们使用 SET 命令带上 NX 选项来实现加锁；
-2. 锁变量需要设置过期时间，以免客户端拿到锁后发生异常，导致锁一直无法释放，所 以，我们在 SET 命令执行时加上 EX/PX 选项，设置其过期时间；
-3. 锁变量的值需要能区分来自不同客户端的加锁操作，以免在释放锁时，出现误释放操 作，所以，我们使用 SET 命令设置锁变量值时，每个客户端设置的值是一个唯一值，用 于标识客户端。
+- 加锁逻辑
 
-对于释放锁操作，需要注意
+利用redis 的setNx 方法，当有多个线程进入时，就利用该方法，第一个线程进入时，redis 中就有这个key 了，返回了1，如果结果是1，则表示他抢到了锁，那么他去执行业务，然后再删除锁，退出锁逻辑，没有抢到锁的线程，等待一定时间后重试即可
 
-释放锁包含了读取锁变量值、判断锁变量值和删除锁变量三个操作，我们无法使用单个命令来实现，所以，我们可以采用 Lua 脚本执行释放锁操作，通过 Redis 原子性地执行 Lua 脚本，来保证释放锁操作的原子性。
+<img src="https://img-blog.csdnimg.cn/d568dca7721d4a4f9711f88beb628cf9.png" width="450">
+
+#### Redis分布式锁误删情况说明
+
+逻辑说明：
+
+持有锁的线程在锁的内部出现了阻塞，导致他的锁自动释放，这时其他线程，线程2来尝试获得锁，就拿到了这把锁，然后线程2在持有锁执行过程中，线程1反应过来，继续执行，而线程1执行过程中，走到了删除锁逻辑，此时就会把本应该属于线程2的锁进行删除，这就是误删别人锁的情况说明
+
+解决方案：解决方案就是在每个线程释放锁的时候，去判断一下当前这把锁是否属于自己，如果属于自己，则不进行锁的删除，假设还是上边的情况，线程1卡顿，锁自动释放，线程2进入到锁的内部执行逻辑，此时线程1反应过来，然后删除锁，但是线程1，一看当前这把锁不是属于自己，于是不进行删除锁逻辑，当线程2走到删除锁逻辑时，如果没有卡过自动释放锁的时间点，则判断当前这把锁是属于自己的，于是删除这把锁。![img](https://img-blog.csdnimg.cn/b3fb7cfbb1e5493897984f1f129ca868.png)
+
+#### 解决误删问题版本二
+
+需求：修改之前的分布式锁实现，满足：在获取锁时存入线程标示（可以用UUID表示） 在释放锁时先获取锁中的线程标示，判断是否与当前线程标示一致
+
+- 如果一致则释放锁
+- 如果不一致则不释放锁
+
+核心逻辑：在存入锁时，放入自己线程的标识，在删除锁时，判断当前这把锁的标识是不是自己存入的，如果是，则进行删除，如果不是，则不进行删除。
+
+<img src="https://img-blog.csdnimg.cn/480bcc2259da48649a803122365e581e.png" width="450">
+
+#### 分布式锁的原子性问题说明
+
+更为极端的误删逻辑说明：
+
+线程1现在持有锁之后，在执行业务逻辑过程中，他正准备删除锁，而且已经走到了条件判断的过程中，比如他已经拿到了当前这把锁确实是属于他自己的，正准备删除锁，但是此时他的锁到期了，那么此时线程2进来，但是线程1他会接着往后执行，当他卡顿结束后，他直接就会执行删除锁那行代码，相当于条件判断并没有起到作用，这就是删锁时的原子性问题，之所以有这个问题，是因为线程1的拿锁，比锁，删锁，实际上并不是原子性的，我们要防止刚才的情况发生，![img](https://img-blog.csdnimg.cn/09bb73954ba14f0593b9777a6e25f977.png)
+
+#### Lua脚本解决原子性问题版本三
+
+> **为什么Redis中lua脚本可以保证原子性？**
+>
+> ​	在redis 的官方文档中有描述lua脚本在执行的时候具有排他性，不允许其他命令或者脚本执行，类似于事务。但是存在的另一个问题是，它在执行的过程中如果一个命令报错不会回滚已执行的命令，所以要保证lua脚本的正确性
+>
+> 查阅总结：lua脚本在执行的时候不允许其他命令出入并发执行，而且他们有两个运行的函数call()和pcall(),两者区别在于，call在执行命令的时候如果报错，会抛出reisd错误终端执行，而pcall不会中断会记录下来错误信息
+
+对于**加锁操作**，我们需要满足三个条件
+
+1. 加锁包括了**读取锁变量、检查锁变量值和设置锁变量值三个操作**，但需要以原子操作的 方式完成，所以，我们使用 SET 命令带上 NX 选项来实现加锁；
+2. 锁变量需要**设置过期时间**，以免客户端拿到锁后发生异常，导致锁一直无法释放，所 以，我们在 SET 命令执行时加上 EX/PX 选项，设置其过期时间；
+3. 锁变量的值需要能**区分来自不同客户端的加锁操作**，以免在释放锁时，出现误释放操 作，所以，我们使用 SET 命令设置锁变量值时，每个客户端设置的值是一个唯一值，用 于**标识客户端**。
+
+对于**释放锁操作**，需要注意
+
+释放锁包含了**读取锁变量值、判断锁变量值和删除锁变量三个操作**，我们无法使用单个命令来实现，所以，我们可以采用 Lua 脚本执行释放锁操作，通过 Redis 原子性地执行 Lua 脚本，来保证释放锁操作的原子性。
+
+<img src="https://img-blog.csdnimg.cn/img_convert/4d4f8c1bef72e87b566dded0a55b5aca.png" width="400">
+
+加锁操作，需要加入线程标识
+
+```java
+public boolean tryLock(long timeoutSec) {
+    // 获取线程标示
+    String threadId = ID_PREFIX + Thread.currentThread().getId();
+    // 获取锁
+    Boolean success = stringRedisTemplate.opsForValue()
+        .setIfAbsent(KEY_PREFIX + name, threadId, timeoutSec, TimeUnit.SECONDS);
+    return Boolean.TRUE.equals(success);
+}
+```
+
+释放锁，调用lua脚本
+
+- 如果脚本中的key和value不想写死，可以作为参数传递。key类型参数会放入KEYS数组，其他参数会放入ARGV数组，在脚本中可以从KEYS和ARGV数组中获取这些参数；
+
+```lua
+-- 这里的 KEYS[1] 就是锁的key，这里的ARGV[1] 就是当前线程标示
+-- 获取锁中的标示，判断是否与当前线程标示一致
+if (redis.call('GET', KEYS[1]) == ARGV[1]) then
+  -- 一致，则删除锁
+  return redis.call('DEL', KEYS[1])
+end
+-- 不一致，则直接返回
+return 0
+```
+
+利用RedisTemplate调用Lua脚本的API如下：
+
+RedisTemplate中，可以利用execute方法去执行lua脚本，参数对应关系就如下图![img](https://img-blog.csdnimg.cn/f3b66541e9f24a90b504be2b8311db40.png)
+
+```java
+private static final DefaultRedisScript<Long> UNLOCK_SCRIPT;
+static {
+    UNLOCK_SCRIPT = new DefaultRedisScript<>();
+    UNLOCK_SCRIPT.setLocation(new ClassPathResource("unlock.lua"));
+    UNLOCK_SCRIPT.setResultType(Long.class);
+}
+
+@Override
+public void unlock() {
+    //TODO  调用lua脚本来实现释放锁
+    stringRedisTemplate.execute(
+            UNLOCK_SCRIPT,
+            Collections.singletonList(KEY_PREFIX + name),
+            ID_PREFIX + Thread.currentThread().getId());
+}
+```
+
+#### 总结：分布式锁实现思路
+
+小总结：
+
+基于Redis的分布式锁实现思路：
+
+- 利用set nx ex获取锁，并设置过期时间，保存线程标示
+- 释放锁时先判断线程标示是否与自己一致，一致则删除锁
+  - 特性：
+    - 利用set nx满足互斥性
+    - 利用set ex保证故障时锁依然能释放，避免死锁，提高安全性
+    - 利用Redis集群保证高可用和高并发特性
+
+笔者总结：我们一路走来，利用添加过期时间，防止死锁问题的发生，但是有了过期时间之后，可能出现误删别人锁的问题，这个问题我们开始是利用删之前 通过拿锁，比锁，删锁这个逻辑来解决的，也就是删之前判断一下当前这把锁是否是属于自己的，但是现在还有原子性问题，也就是我们没法保证拿锁比锁删锁是一个原子性的动作，最后通过lua表达式来解决这个问题
+
+但是目前还剩下一个问题锁不住，什么是锁不住呢，你想一想，如果当过期时间到了之后，我们可以给他续期一下，比如续个30s，就好像是网吧上网， 网费到了之后，然后说，来，网管，再给我来10块的，是不是后边的问题都不会发生了，那么续期问题怎么解决呢，可以依赖于我们接下来要学习redission啦
+
+## 5、分布式锁-redisson
+
+### redisson功能介绍
+
+> https://github.com/redisson/redisson
+
+**基于setnx实现的分布式锁存在下面的问题：**
+
+**重入问题**：重入问题是指 获得锁的线程可以再次进入到相同的锁的代码块中，可重入锁的意义在于防止死锁，比如HashTable这样的代码中，他的方法都是使用synchronized修饰的，假如他在一个方法内，调用另一个方法，那么此时如果是不可重入的，不就死锁了吗？所以可重入锁他的主要意义是防止死锁，我们的synchronized和Lock锁都是可重入的。
+
+**不可重试**：是指目前的分布式只能尝试一次，我们认为合理的情况是：当线程在获得锁失败后，他应该能再次尝试获得锁。
+
+**超时释放：**我们在加锁时增加了过期时间，这样的我们可以防止死锁，但是如果卡顿的时间超长，虽然我们采用了lua表达式防止删锁的时候，误删别人的锁，但是毕竟没有锁住，有安全隐患
+
+**主从一致性：** 如果Redis提供了主从集群，当我们向集群写数据时，主机需要异步的将数据同步给从机，而万一在同步过去之前，主机宕机了，就会出现死锁问题。![img](https://img-blog.csdnimg.cn/4f4c450da13243dfacfcc3815d120d4c.png)
+
+Redisson是一个在Redis的基础上实现的Java驻内存数据网格（In-Memory Data Grid）。它不仅提供了一系列的分布式的Java常用对象，还提供了许多分布式服务，其中就包含了各种分布式锁的实现。
+
+### Redisson快速入门
+
+引入依赖：
+
+```
+<dependency>
+	<groupId>org.redisson</groupId>
+	<artifactId>redisson</artifactId>
+	<version>3.13.6</version>
+</dependency>
+```
+
+配置Redisson客户端：
+
+```java
+@Configuration
+public class RedissonConfig {
+ 
+    @Bean
+    public RedissonClient redissonClient(){
+        // 配置
+        Config config = new Config();
+        config.useSingleServer().setAddress("redis://192.168.19.128:6379")
+                .setPassword("123456");
+        // 创建RedissonClient对象
+        return Redisson.create(config);
+    }
+}
+```
+
+如何使用Redission的分布式锁
+
+```java
+
+@Resource
+private RedissionClient redissonClient;
+ 
+@Test
+void testRedisson() throws Exception{
+    //获取锁(可重入)，指定锁的名称
+    RLock lock = redissonClient.getLock("anyLock");
+    //尝试获取锁，参数分别是：获取锁的最大等待时间(期间会重试)，锁自动释放时间，时间单位
+    boolean isLock = lock.tryLock(1,10,TimeUnit.SECONDS);
+    //判断获取锁成功
+    if(isLock){
+        try{
+            System.out.println("执行业务");          
+        }finally{
+            //释放锁
+            lock.unlock();
+        }
+        
+    }
+```
+
+### redisson可重入锁原理P66
+
+在Lock锁中，他是借助于底层的一个voaltile的一个state变量来记录重入的状态的，比如当前没有人持有这把锁，那么state=0，假如有人持有这把锁，那么state=1，如果持有这把锁的人再次持有这把锁，那么state就会+1 ，如果是对于synchronized而言，他在c语言代码中会有一个count，原理和state类似，也是重入一次就加一，释放一次就-1 ，直到减少成0 时，表示当前这把锁没有被人持有。
+
+在redission中，我们的也支持支持可重入锁
+
+在分布式锁中，他采用hash结构用来存储锁，其中大key表示表示这把锁是否存在，用小key表示当前这把锁被哪个线程持有
+
+```Lua
+"if (redis.call('exists', KEYS[1]) == 0) then " +
+    "redis.call('hset', KEYS[1], ARGV[2], 1); " +
+    "redis.call('pexpire', KEYS[1], ARGV[1]); " +
+    "return nil; " +
+"end; " +
+
+"if (redis.call('hexists', KEYS[1], ARGV[2]) == 1) then " +
+    "redis.call('hincrby', KEYS[1], ARGV[2], 1); " +
+    "redis.call('pexpire', KEYS[1], ARGV[1]); " +
+    "return nil; " +
+"end; " +
+"return redis.call('pttl', KEYS[1]);"
+```
+
+判断数据是否存在 name：是lock是否存在,如果==0，就表示当前这把锁不存在
+
+redis.call('hset', KEYS[1], ARGV[2], 1);此时他就开始往redis里边去写数据 ，写成一个hash结构
+
+
+
+如果当前这把锁存在，则第一个条件不满足，再判断
+
+redis.call('hexists', KEYS[1], ARGV[2]) == 1
+
+此时需要通过大key+小key判断当前这把锁是否是属于自己的，如果是自己的，则进行
+
+redis.call('hincrby', KEYS[1], ARGV[2], 1)
+
+将当前这个锁的value进行+1 ，redis.call('pexpire', KEYS[1], ARGV[1]); 然后再对其设置过期时间，如果以上两个条件都不满足，则表示当前这把锁抢锁失败，最后返回pttl，即为当前这把锁的失效时间
+
+![img](https://img-blog.csdnimg.cn/42a864da719f4b52ad19659b9fd36830.png)
+
+**获取锁的Lua脚本：**
+
+![img](https://img-blog.csdnimg.cn/f3416bd4eb784266bbc05cdc68c84000.png)
+
+**释放锁的Lua脚本：**
+
+![img](https://img-blog.csdnimg.cn/9475663c5b5f470a95081a88490e20f1.png)
+
+### redisson锁重试和WatchDog机制原理P67
+
+抢锁过程中，获得当前线程，通过tryAcquire进行抢锁，该抢锁逻辑和之前逻辑相同
+
+1、先判断当前这把锁是否存在，如果不存在，插入一把锁，返回null
+
+2、判断当前这把锁是否是属于当前线程，如果是，则返回null
+
+所以如果返回是null，则代表着当前这哥们已经抢锁完毕，或者可重入完毕，但是如果以上两个条件都不满足，则进入到第三个条件，返回的是锁的失效时间，同学们可以自行往下翻一点点，你能发现有个while( true) 再次进行tryAcquire进行抢锁
+
+```
+long threadId = Thread.currentThread().getId();
+Long ttl = tryAcquire(-1, leaseTime, unit, threadId);
+// lock acquired
+if (ttl == null) {
+    return;
+}
+```
+
+ 接下来会有一个条件分支，因为lock方法有重载方法，一个是带参数，一个是不带参数，如果不带参数传入的值是-1，如果传入参数，则leaseTime是他本身，所以如果传入了参数，此时leaseTime != -1 则会进去抢锁，抢锁的逻辑就是之前说的那三个逻辑	
+
+```
+if (leaseTime != -1) {
+    return tryLockInnerAsync(waitTime, leaseTime, unit, threadId, RedisCommands.EVAL_LONG);
+}
+```
+
+如果是没有传入时间，则此时也会进行抢锁， 而且抢锁时间是默认看门狗时间 `commandExecutor.getConnectionManager().getCfg().getLockWatchdogTimeout()`
+
+`ttlRemainingFuture.onComplete((ttlRemaining, e)` 这句话相当于对以上抢锁进行了监听，也就是说当上边抢锁完毕后，此方法会被调用，具体调用的逻辑就是去后台开启一个线程，进行**续约逻辑**，也就是看门狗线程
+
+```java
+private <T> RFuture<Long> tryAcquireAsync(long waitTime, long leaseTime, TimeUnit unit, long threadId) {
+        if (leaseTime != -1L) {
+            return this.tryLockInnerAsync(waitTime, leaseTime, unit, threadId, RedisCommands.EVAL_LONG);
+        } else {
+            RFuture<Long> ttlRemainingFuture = this.tryLockInnerAsync(waitTime, this.commandExecutor.getConnectionManager().getCfg().getLockWatchdogTimeout(), TimeUnit.MILLISECONDS, threadId, RedisCommands.EVAL_LONG);
+            ttlRemainingFuture.onComplete((ttlRemaining, e) -> {
+                if (e == null) {
+                    if (ttlRemaining == null) {
+                        this.scheduleExpirationRenewal(threadId);
+                    }
+
+                }
+            });
+            return ttlRemainingFuture;
+        }
+    }
+```
+
+此逻辑就是续约逻辑，注意看commandExecutor.getConnectionManager().newTimeout() 此方法
+
+Method( **new** TimerTask() {},参数2 ，参数3 )
+
+指的是：通过参数2，参数3 去描述什么时候去做参数1的事情，现在的情况是：**10s之后去做参数一的事情**
+
+**因为锁的失效时间是30s，当10s之后，此时这个timeTask 就触发了，他就去进行续约，把当前这把锁续约成30s，如果操作成功，那么此时就会递归调用自己，再重新设置一个timeTask()，于是再过10s后又再设置一个timerTask，完成不停的续约**
+
+那么大家可以想一想，假设我们的线程出现了宕机他还会续约吗？当然不会，因为没有人再去调用renewExpiration这个方法，所以等到时间之后自然就释放了。
+
+```java
+//锁重试中更新有效期机制
+private void renewExpiration() {
+        RedissonLock.ExpirationEntry ee = (RedissonLock.ExpirationEntry)EXPIRATION_RENEWAL_MAP.get(this.getEntryName());
+        if (ee != null) {
+            Timeout task = this.commandExecutor.getConnectionManager().newTimeout(
+          new TimerTask() {
+                public void run(Timeout timeout) throws Exception {
+                    RedissonLock.ExpirationEntry ent = (RedissonLock.ExpirationEntry)
+                      RedissonLock.EXPIRATION_RENEWAL_MAP.get(
+                      								RedissonLock.this.getEntryName());
+                    if (ent != null) {
+                        Long threadId = ent.getFirstThreadId();
+                        if (threadId != null) {
+                          //renewExpirationAsync刷新有效期
+                            RFuture<Boolean> future = RedissonLock.this.
+                              					renewExpirationAsync(threadId);
+                            future.onComplete((res, e) -> {
+                                if (e != null) {
+                                    RedissonLock.log.error("Can't update lock " + RedissonLock.
+                                                           this.getName() + " expiration", e);
+                                } else {
+                                    if (res) {
+                                      //如果拿到锁了，那么就调自己（更新有小气）
+                                        RedissonLock.this.renewExpiration();
+                                    }
+
+                                }
+                            });
+                        }
+                    }
+                }
+              //过了30s/3进行重试
+            }, this.internalLockLeaseTime / 3L, TimeUnit.MILLISECONDS);
+            ee.setTimeout(task);
+        }
+    }
+```
+
+#### 分布式锁重试原理图示
+
+![img](https://img-blog.csdnimg.cn/9ee9e998cee84ac0a26b96c0949e7c1b.png)
+
+ Redission分布式锁原理
+
+![img](https://img-blog.csdnimg.cn/33f9d8dd712641c098e54e99661dd623.png)
+
+### redission锁的MutiLock原理（主从一致性）
+
+为了提高redis的可用性，我们会搭建集群或者主从，现在以主从为例
+
+此时我们去写命令，写在主机上， 主机会将数据同步给从机，但是假设在主机还没有来得及把数据写入到从机去的时候，此时主机宕机，哨兵会发现主机宕机，并且选举一个slave变成master，而此时新的master中实际上并没有锁信息，此时锁信息就已经丢掉了。
+
+![img](https://img-blog.csdnimg.cn/25fac4dd5e5242d09bdf0f10c3eb0b8b.png)
+
+ 为了解决这个问题，redission提出来了MutiLock锁，使用这把锁咱们就不使用主从了，每个节点的地位都是一样的， **这把锁加锁的逻辑需要写入到每一个主丛节点上，只有所有的服务器都写入成功，此时才是加锁成功**，假设现在某个节点挂了，那么他去获得锁的时候，只要有一个节点拿不到，都不能算是加锁成功，就保证了加锁的可靠性。![img](https://img-blog.csdnimg.cn/b253c158707a4341b5f6ab8ce10717f8.png)
+
+那么MutiLock 加锁原理是什么呢？笔者画了一幅图来说明
+
+当我们去设置了多个锁时，redission会将多个锁添加到一个集合中，然后用while循环去不停去尝试拿锁，但是会有一个总共的加锁时间，这个时间是用需要加锁的个数 * 1500ms ，假设有3个锁，那么时间就是4500ms，假设在这4500ms内，所有的锁都加锁成功， 那么此时才算是加锁成功，如果在4500ms有线程加锁失败，则会再次去进行重试.
+
+![img](https://img-blog.csdnimg.cn/370170c3930f4e59a82d8503388d405a.png)
+
+## 6、秒杀优化
+
+秒杀订单流程回顾：
+
+​	当用户发起请求，此时会请求nginx，nginx会访问到tomcat，而tomcat中的程序，会进行串行操作，分成如下几个步骤
+
+1、查询优惠卷
+
+2、判断秒杀库存是否足够
+
+3、查询订单
+
+4、校验是否是一人一单
+
+5、扣减库存
+
+6、创建订单
+
+
+
+**存在问题：**
+
+**在这六步操作中，又有很多操作是要去操作数据库的，而且还是一个线程串行执行， 这样就会导致我们的程序执行的很慢，所以我们需要异步程序执行，那么如何加速呢？**
+
+![](https://img-blog.csdnimg.cn/c0f4c9c83a594332877220edb5c4be66.png)
+
+​	优化方案：我们**将耗时比较短的逻辑判断放入到redis中**，比如是否库存足够，比如是否一人一单，这样的操作，只要这种逻辑可以完成，就意味着我们是一定可以下单完成的，我们只需要进行快速的逻辑判断，根本就不用等下单逻辑走完，我们直接给用户返回成功， 再在后台开一个线程，后台线程慢慢的去执行queue里边的消息，这样程序不就超级快了吗？而且也不用担心线程池消耗殆尽的问题，因为这里我们的程序中并没有手动使用任何线程池，当然这里边有两个难点
+
+第一个难点是我们**怎么在redis中去快速校验一人一单，还有库存判断**
+
+第二个难点是由于我们校验和tomcat下单是两个线程，**那么我们如何知道到底哪个单他最后是否成功，或者是下单完成。**为了完成这件事我们在redis操作完之后，我们会将一些信息返回给前端，同时也会把这些信息丢到异步queue中去，后续操作中，可以通过这个id来查询我们tomcat中的下单逻辑是否完成了。
+
+![img](https://img-blog.csdnimg.cn/18d4a9bfb6124e9ca7ea428cec2381ed.png)
+
+### 异步秒杀思路
+
+现在来看看整体思路：当用户下单之后，判断库存是否充足只需要到redis中去根据key找对应的value是否大于0即可，如果不充足，则直接结束，如果充足，继续在redis中判断用户是否可以下单，如果set集合中没有这条数据，说明他可以下单，如果set集合中没有这条记录，则将userId和优惠卷存入到redis中，并且返回0，整个过程需要保证是原子性的，我们可以使用lua来操作
+
+当以上判断逻辑走完之后，我们可以判断当前redis中返回的结果是否是0 ，如果是0，则表示可以下单，则将之前说的信息存入到到queue中去，然后返回，然后再来个线程异步的下单，前端可以通过返回的订单id来判断是否下单成功。
+
+- **异步消息丢失是消息队列的问题**
+
+![img](https://img-blog.csdnimg.cn/109fcc3661a34d32a8b4d64f5133b79f.png)
+
+### Redis完成秒杀资格判断
+
+**需求：**
+
+- 新增秒杀优惠券的同时，将优惠券信息保存到Redis中`VoucherServiceImpl`
+
+  `VoucherOrderServiceImpl.seckkillVoucher`：
+
+- 基于Lua脚本，判断秒杀库存、一人一单，决定用户是否抢购成功
+
+- 如果抢购成功，将优惠券id和用户id封装后存入阻塞队列
+
+- 开启线程任务，不断从阻塞队列中获取信息，实现异步下单功能
+
+
+
+### 阻塞队列实现异步下单
+
+阻塞队列：BlockingQueue  
+
+`VoucherOrderServiceImpl`
+
+修改下单动作，现在我们去下单时，是通过lua表达式去原子执行判断逻辑，如果判断我出来不为0 ，则要么是库存不足，要么是重复下单，返回错误信息，如果是0，则把下单的逻辑保存到队列中去，然后异步执行
+
+```java
+@Override
+public Result seckkillVoucher(Long voucherId) {
+    ....
+    // 2.4 创建阻塞队列BlockingQueue,并将订单放入
+    ordertasks.add(voucherOrder);
+
+    // 3.获取代理对象,让阻塞队列中能获取
+    proxy = (IVoucherOrderService) AopContext.currentProxy();
+
+    // 3.返回订单id
+    return Result.ok(orderId);
+}
+
+//线程池中的方法,获取阻塞队列中的订单并入库(方法注册在类init后)
+	private class VoucherOrderHandler implements Runnable{
+        @Override
+        public void run() {
+            while (true){
+                // 1. 获取订单中的订单信息
+                try {
+                    VoucherOrder voucherOrder = ordertasks.take();
+                    handleVoucherOrder(voucherOrder); // 处理订单,订单入库
+                } catch (Exception e) {
+                    log.error("处理订单异常:" + e);
+                    e.printStackTrace();
+                }
+
+            }
+        }
+    }
+```
+
+
+
+
+
+
+
+**小总结：**
+
+**秒杀业务的优化思路是什么？**
+
+- 先利用Redis完成库存余量、一人一单判断，完成抢单业务
+- 再将下单业务放入阻塞队列，利用独立线程**异步下单**
+
+**基于阻塞队列的异步秒杀存在哪些问题？**
+
+- 内存限制问题
+- 数据安全问题
+
+## 7、Redis消息队列
+
+什么是消息队列：字面意思就是存放消息的队列。最简单的消息队列模型包括3个角色：
+
+缺点：
+
+- 消息队列：存储和管理消息，也被称为消息代理（Message Broker）
+
+- 生产者：发送消息到消息队列
+
+- 消费者：从消息队列获取消息并处理消息
+
+  ​
+
+Redis提供了三种不同的方式来实现消息队列：
+
+◆ list结构：基于List结构模拟消息队列
+
+◆ PubSub：基本的点对点消息模型
+
+◆ Stream：比较完善的消息队列模型
+
+![image-20220518205827187](https://img-blog.csdnimg.cn/img_convert/1ac248b01c99feb727824433afa08fd8.png)
+
+### 基于List结构模拟消息队列
+
+- **基于List结构模拟消息队列**
+
+  消息队列（Message Queue），字面意思就是存放消息的队列。而Redis的list数据结构是一个双向链表，很容易模拟出队列效果。
+
+  队列是入口和出口不在一边，因此我们可以利用：LPUSH 结合 RPOP、或者 RPUSH 结合 LPOP来实现。 不过要注意的是，当队列中没有消息时RPOP或LPOP操作会返回null，并不像JVM的阻塞队列那样会阻塞并等待消息。因此**这里应该使用BRPOP或者BLPOP来实现阻塞效果**。![img](https://img-blog.csdnimg.cn/d9f7701b44074ca488da2e870150766d.png)
+
+**基于List的消息队列有哪些优缺点？**
+
+**优点：**
+
+- 利用Redis存储，不受限于JVM内存上限
+- 基于Redis的持久化机制，数据安全性有保证
+- 可以满足消息有序性
+
+**缺点：**
+
+- 无法避免消息丢失
+- 只支持单消费者
+
+
+
+### 基于PubSub的消息队列
+
+PubSub（发布订阅）是Redis2.0版本引入的消息传递模型。顾名思义，消费者可以订阅一个或多个channel，生产者 向对应channel发送消息后，所有订阅者都能收到相关消息。
+
+◼ SUBSCRIBE channel [channel] ：订阅一个或多个频道
+
+◼ PUBLISH channel msg ：向一个频道发送消息
+
+◼ PSUBSCRIBE pattern[pattern] ：订阅与pattern格式匹配的所有频道
+
+![image-20220518210545049](https://img-blog.csdnimg.cn/img_convert/075dfd2b3a695d46d9a2c5ca0105167f.png)
+
+基于PubSub的消息队列有哪些优缺点？
+
+优点：
+
+ • 采用发布订阅模型，支持多生产、多消费
+
+缺点：
+
+ • 不支持数据持久化
+
+ • 无法避免消息丢失
+
+ • 消息堆积有上限，超出时数据丢失
+
+
+
+### 基于Stream的消息队列
+
+Stream 是 Redis 5.0 引入的一种新数据类型，可以实现一个功能非常完善的消息队列。
+
+#### 基于Stream的消息队列-XREAD
+
+![](https://img-blog.csdnimg.cn/76045e12676849709ed02ad577388c59.png)
+
+---
+
+在业务开发中，我们可以循环的调用XREAD阻塞方式来查询最新消息，从而实现持续监听队列的效果，伪代码如下 ![img](https://img-blog.csdnimg.cn/9dd82ea2ef0a42459545d6632fd38517.png)
+
+注意：当指定起始ID为$时，代表读取最新的消息，如果我们处理一条消息的过程中，又有超过1条以上的消息到达队列，则下次获取时也只能获取到最新的一条，会出现漏读消息的问题
+
+
+
+**STREAM类型消息队列的XREAD命令特点：**
+
+- 消息可回溯
+- 一个消息可以被多个消费者读取
+- 可以阻塞读取
+- 有消息漏读的风险
+
+#### 基于Stream的消息队列-消费者组
+
+消费者组（Consumer Group）：将多个消费者划分到一个组中，监听同一个队列。具备下列特点：![img](https://img-blog.csdnimg.cn/fe5b5f4219cb422b86003bd9a0b6b43c.png)
+
+ 创建消费者组： ![img](https://img-blog.csdnimg.cn/10925d31a57946dc9dade4967c72ef2c.png)
+
+key：队列名称 
+
+groupName：消费者组名称 
+
+ID：起始ID标示，$代表队列中最后一个消息，0则代表队列中第一个消息 
+
+MKSTREAM：队列不存在时自动创建队列
+
+**删除指定的消费者组**
+
+```
+XGROUP DESTORY key groupName
+```
+
+**给指定的消费者组添加消费者**
+
+```
+XGROUP CREATECONSUMER key groupname consumername
+```
+
+**删除消费者组中的指定消费者**
+
+```
+XGROUP DELCONSUMER key groupname consumername
+```
+
+从消费者组读取消息：
+
+```
+XREADGROUP GROUP group consumer [COUNT count] [BLOCK milliseconds] [NOACK] STREAMS key [key ...] ID [ID ...]
+```
+
+- group：消费组名称
+- consumer：消费者名称，如果消费者不存在，会自动创建一个消费者
+- count：本次查询的最大数量
+- BLOCK milliseconds：当没有消息时最长等待时间
+- NOACK：无需手动ACK，获取到消息后自动确认
+- STREAMS key：指定队列名称
+- ID：获取消息的起始ID：
+- ">"：从下一个未消费的消息开始
+- 其它：根据指定id从pending-list中获取已消费但未确认的消息，例如0，是从pending-list中的第一个消息开始
+
+消费者监听消息的基本思路：
+
+<img src="https://img-blog.csdnimg.cn/e36949a4945042d7a9626124c4404e64.png" height = "250px">
+
+
+
+ STREAM类消息队列总结
+
+![img](https://img-blog.csdnimg.cn/21629a3946514500b665700b4986eb57.png)
+
+###  实战：基于Redis的Stream结构作为消息队列，实现异步秒杀下单
+
+需求：
+
+- 创建一个Stream类型的消息队列，名为stream.orders
+- 修改之前的秒杀下单Lua脚本，在认定有抢购资格后，直接向stream.orders中添加消息，内容包含voucherId、userId、orderId
+- 项目启动时，开启一个线程任务，尝试获取stream.orders中的消息，完成下单
+
+**视频P77**
+
+前置操作：
+
+登录redisclient  `auth '123456'`，然后创建消费者组 `XGROUP CREATE stream.orders g1 0 MKSTREAM`
+
+## 8、达人探店
+
