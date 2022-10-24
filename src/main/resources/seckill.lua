@@ -34,5 +34,10 @@ return 0
 -- 报错记录：
 -- 17 .attempt to compare nil with number
 -- 原因：没有给产品添加库存；解决办法：在redis中添加库存 set Seckill:0101:kc 10
+-- 先登录 auth '123456'
 
 -- 31: Lua redis() command arguments must be strings or integers
+-- 原因：调用参数与使用参数个数不匹配
+
+-- 启动报错：NOGROUP No such key 'stream.orders' or consumer group 'g1' in XREADGROUP with GROUP option
+--redis-cli 中添加组：XGROUP CREATE stream.orders g1 0 MKSTREAM

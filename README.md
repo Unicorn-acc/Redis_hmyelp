@@ -18,6 +18,28 @@
 
 
 
+项目运行：
+
+1、nginx
+
+2、redis
+
+3、项目8081、8082
+
+4、Mysql
+
+---
+
+**Redis在秒杀场景下的应用：**
+
+- 缓存
+- 分布式锁
+- 超卖问题
+- Lua脚本
+- Redis消息队列
+
+---
+
 Redis各数据结构使用点：
 
 String：
@@ -33,7 +55,19 @@ List：
 
 - 查询商铺类型：`ShopTypeServiceImpl.queryTypeList`
 
-​	作为消息队列使用：
+  作为消息队列使用：
+
+Set：
+
+- 点赞功能，重复点为取消点赞：`BlogServiceImpl.likeblog`
+
+SortedSet:
+
+- 点赞排行榜，显示最早点赞的前5(朋友圈点赞)：
+
+  ​	更改`BlogServiceImpl.likeblog`，实现`BlogServiceImpl.queryBlogLikes`
+
+
 
 # Redis实战篇技术点
 
@@ -960,7 +994,7 @@ redis.call('hincrby', KEYS[1], ARGV[2], 1)
 
 ![img](https://img-blog.csdnimg.cn/9475663c5b5f470a95081a88490e20f1.png)
 
-### redisson锁重试和WatchDog机制原理P67
+### redisson锁重试和WatchDog超时释放机制原理P67
 
 抢锁过程中，获得当前线程，通过tryAcquire进行抢锁，该抢锁逻辑和之前逻辑相同
 
@@ -1372,5 +1406,366 @@ XREADGROUP GROUP group consumer [COUNT count] [BLOCK milliseconds] [NOACK] STREA
 
 登录redisclient  `auth '123456'`，然后创建消费者组 `XGROUP CREATE stream.orders g1 0 MKSTREAM`
 
+### 总结：秒杀优惠券、一人一单实现思路
+
+在秒杀优惠券功能一开始，使用乐观锁解决超卖问题，
+
+在实现一人一单功能时，先利用redis实现了锁，解决了单机、集群下的线程安全问题，利用redisson分布式锁解决了锁误删问题、原子性操作问题、锁的可重入问题、锁超时释放问题
+
+后面使用进行了秒杀优化，使用基于Redis实现秒杀资格判断、使用阻塞队列实现异步下单、使用Redis消息队列实现异步下单，
+
+
+
 ## 8、达人探店
+
+业务：
+
+- 发布探店笔记
+- 点赞
+- 点赞排行榜
+
+发布探店笔记
+
+探店笔记类似点评网站的评价，往往是图文结合。对应的表有两个：
+
+tb_blog：探店笔记表，包含笔记中的标题、文字、图片等
+
+tb_blog_comments：其他用户对探店笔记的评价![img](https://img-blog.csdnimg.cn/cff150038a594d37a9344988715da7d5.png)
+
+
+
+### 重复点赞问题-set
+
+初始代码
+
+```java
+@GetMapping("/likes/{id}")
+public Result queryBlogLikes(@PathVariable("id") Long id) {
+    //修改点赞数量
+    blogService.update().setSql("liked = liked +1 ").eq("id",id).update();
+    return Result.ok();
+}
+```
+
+问题分析：这种方式会导致一个用户无限点赞，明显是不合理的
+
+造成这个问题的原因是，我们现在的逻辑，发起请求只是给数据库+1，所以才会出现这个问题
+
+
+
+完善点赞功能
+
+需求：
+
+- 同一个用户只能点赞一次，再次点击则取消点赞
+- 如果当前用户已经点赞，则点赞按钮高亮显示（前端已实现，判断字段Blog类的isLike属性）
+
+实现步骤：
+
+- 给Blog类中添加一个isLike字段，标示是否被当前用户点赞
+- 修改点赞功能，利用Redis的set集合判断是否点赞过，未点赞过则点赞数+1，已点赞过则点赞数-1
+- 修改根据id查询Blog的业务，判断当前登录用户是否点赞过，赋值给isLike字段
+- 修改分页查询Blog业务，判断当前登录用户是否点赞过，赋值给isLike字段
+
+
+
+使用数据库来判断的话对数据库压力太大，使用redis来记录
+
+为什么采用set集合：
+
+因为我们的数据是不能重复的，当用户操作过之后，无论他怎么操作，都是
+
+### 点赞排行榜-sortedset
+
+在探店笔记的详情页面，应该把给该笔记点赞的人显示出来，比如最早点赞的TOP5，形成点赞排行榜
+
+![image-20220603071611145](https://img-blog.csdnimg.cn/img_convert/c669ed549a8b65fd692e42343a13bd00.png)
+
+需求：按照点赞时间先后排序，返回Top5的用户
+
+![image-20220603071653652](https://img-blog.csdnimg.cn/img_convert/8eaf74db47a83f7b5b3caa419ae98178.png)
+
+这里我们选择sortedset这个数据结构，score值设置为时间，这样就可以按照点赞时间先后排序了
+
+
+
+## 9、好友关注
+
+目录：
+
+- 关注和取关
+- 共同关注
+- 关注推送
+
+
+
+### 关注和取消关注功能![img](https://img-blog.csdnimg.cn/4a78d3b1d1374464a0ad476b0213a4cb.png)
+
+针对用户的操作：可以对用户进行关注和取消关注功能。
+
+实现思路：
+
+需求：基于该表数据结构，实现两个接口：
+
+- 关注和取关接口
+- 判断是否关注的接口
+
+关注是User之间的关系，是博主与粉丝的关系，数据库中有一张tb_follow表来标示。
+
+需要把主键修改为自增长，简化开发。
+
+
+
+### 共同关注-求交集(待完成)
+
+想要去看共同关注的好友，需要首先进入到这个页面，这个页面会发起两个请求
+
+1、去查询用户的详情
+
+2、去查询用户的笔记
+
+以上两个功能和共同关注没有什么关系，大家可以自行将笔记中的代码拷贝到idea中就可以实现这两个功能了，我们的重点在于共同关注功能。![img](https://img-blog.csdnimg.cn/5b1c870e77164d80be80a41952ee20b8.png)
+
+接下来看看共同关注如何实现：
+
+需求：利用Redis中恰当的数据结构，实现共同关注功能。在博主个人页面展示出当前用户与博主的共同关注呢。
+
+当然是使用我们之前学习过的set集合咯，在set集合中，有交集并集补集的api，我们可以把两人的关注的人分别放入到一个set集合中，然后再通过api去查看这两个set集合中的交集数据。
+
+先来改造当前的关注列表
+
+改造原因是因为我们需要在用户关注了某位用户后，需要将数据放入到set集合中，方便后续进行共同关注，同时当取消关注时，也需要从set集合中进行删除
+
+
+
+### 好友关注动态推送-Feed流实现方案(待完成)
+
+当我们关注了用户后，这个用户发了动态，那么我们应该把这些数据推送给用户，这个需求，其实我们又把他叫做Feed流，关注推送也叫做Feed流，直译为投喂。为用户持续的提供“沉浸式”的体验，通过无限下拉刷新获取新的信息。
+
+对于传统的模式的内容解锁：我们是需要用户去通过搜索引擎或者是其他的方式去解锁想要看的内容![img](https://img-blog.csdnimg.cn/e2ba4e231e1c488081c1a482b7c6b0e8.png)
+
+ 对于新型的Feed流的的效果：不需要我们用户再去推送信息，而是系统分析用户到底想要什么，然后直接把内容推送给用户，从而使用户能够更加的节约时间，不用主动去寻找。 ![img](https://img-blog.csdnimg.cn/0890104302244d4c92db74a4334aa6e1.png)
+
+Feed流的实现有两种模式：
+
+Feed流产品有两种常见模式：
+
+ Timeline：不做内容筛选，简单的按照内容发布时间排序，常用于好友或关注。例如**朋友圈**
+
+- 优点：信息全面，不会有缺失。并且实现也相对简单
+- 缺点：信息噪音较多，用户不一定感兴趣，内容获取效率低
+
+智能排序：利用智能算法屏蔽掉违规的、用户不感兴趣的内容。推送用户感兴趣信息来吸引用户
+
+- 优点：投喂用户感兴趣信息，用户粘度很高，容易沉迷
+- 缺点：如果算法不精准，可能起到反作用 本例中的个人页面，是基于关注的好友来做Feed流，因此采用Timeline的模式。该模式的实现方案有三种：
+
+
+
+我们本次针对好友的操作，采用的就是Timeline的方式，只需要拿到我们关注用户的信息，然后按照时间排序即可
+
+，因此采用Timeline的模式。该模式的实现方案有三种：
+
+- 拉模式
+- 推模式
+- 推拉结合
+
+**拉模式**：也叫做读扩散
+
+该模式的核心含义就是：当张三和李四和王五发了消息后，都会保存在自己的邮箱中，假设赵六要读取信息，那么他会从读取他自己的收件箱，此时系统会从他关注的人群中，把他关注人的信息全部都进行拉取，然后在进行排序
+
+优点：比较节约空间，因为赵六在读信息时，并没有重复读取，而且读取完之后可以把他的收件箱进行清楚。
+
+缺点：比较延迟，当用户读取数据时才去关注的人里边去读取数据，假设用户关注了大量的用户，那么此时就会拉取海量的内容，对服务器压力巨大。![img](https://img-blog.csdnimg.cn/2829f80d85b74a3e9fe2e25e0a4da883.png)
+
+**推模式**：也叫做写扩散。
+
+推模式是没有写邮箱的，当张三写了一个内容，此时会主动的把张三写的内容发送到他的粉丝收件箱中去，假设此时李四再来读取，就不用再去临时拉取了
+
+优点：时效快，不用临时拉取
+
+缺点：内存压力大，假设一个大V写信息，很多人关注他， 就会写很多分数据到粉丝那边去![img](https://img-blog.csdnimg.cn/6810ed316ff04f4898a6b86e2f0c38a1.png)
+
+**推拉结合模式**：也叫做读写混合，兼具推和拉两种模式的优点。
+
+推拉模式是一个折中的方案，站在发件人这一段，如果是个普通的人，那么我们采用写扩散的方式，直接把数据写入到他的粉丝中去，因为普通的人他的粉丝关注量比较小，所以这样做没有压力，如果是大V，那么他是直接将数据先写入到一份到发件箱里边去，然后再直接写一份到活跃粉丝收件箱里边去，现在站在收件人这端来看，如果是活跃粉丝，那么大V和普通的人发的都会直接写入到自己收件箱里边来，而如果是普通的粉丝，由于他们上线不是很频繁，所以等他们上线时，再从发件箱里边去拉信息。![img](https://img-blog.csdnimg.cn/e9f4fbd21d5042339bb79450894a06b2.png)
+
+ ![img](https://img-blog.csdnimg.cn/3520c2e77c8c4f509ce5667b3986de03.png)
+
+
+
+## 10、附近商户-GEO数据(待完成)
+
+
+
+## 11、用户签到-BitMap
+
+### BitMap功能演示与实现
+
+我们针对签到功能完全可以通过mysql来完成，比如说以下这张表![img](https://img-blog.csdnimg.cn/73261a34b446437d97409b001339be02.png)
+
+ 
+
+用户一次签到，就是一条记录，假如有1000万用户，平均每人每年签到次数为10次，则这张表一年的数据量为 1亿条
+
+每签到一次需要使用（8 + 8 + 1 + 1 + 3 + 1）共22 字节的内存，一个月则最多需要600多字节
+
+我们如何能够简化一点呢？其实可以考虑小时候一个挺常见的方案，就是小时候，咱们准备一张小小的卡片，你只要签到就打上一个勾，我最后判断你是否签到，其实只需要到小卡片上看一看就知道了
+
+我们可以采用类似这样的方案来实现我们的签到需求。
+
+
+
+我们按月来统计用户签到信息，签到记录为1，未签到则记录为0.
+
+**把每一个bit位对应当月的每一天，形成了映射关系。用0和1标示业务状态，这种思路就称为位图（BitMap）。这样我们就用极小的空间，来实现了大量数据的表示**
+
+Redis中是利用string类型数据结构实现BitMap，因此最大上限是512M，转换为bit则是 2^32个bit位。
+
+ ![img](https://img-blog.csdnimg.cn/5c825069bf2f4c0985fad40ca9367c67.png)
+
+BitMap的操作命令有：
+
+- SETBIT：向指定位置（offset）存入一个0或1
+- GETBIT ：获取指定位置（offset）的bit值
+- BITCOUNT ：统计BitMap中值为1的bit位的数量
+- BITFIELD ：操作（查询、修改、自增）BitMap中bit数组中的指定位置（offset）的值
+- BITFIELD_RO ：获取BitMap中bit数组，并以十进制形式返回
+- BITOP ：将多个BitMap的结果做位运算（与 、或、异或）
+- BITPOS ：查找bit数组中指定范围内第一个0或1出现的位置
+
+---
+
+**签到功能实现：**
+
+需求：实现签到接口，将当前用户当天签到信息保存到Redis中
+
+思路：我们可以把年和月作为bitMap的key，然后保存到一个bitMap中，每次签到就到对应的位上把数字从0变成1，只要对应是1，就表明说明这一天已经签到了，反之则没有签到。
+
+我们通过接口文档发现，此接口并没有传递任何的参数，没有参数怎么确实是哪一天签到呢？这个很容易，可以通过后台代码直接获取即可，然后到对应的地址上去修改bitMap。
+
+
+
+提示：因为BitMap底层是基于String数据结构，因此其操作也都封装在字符串相关操作中了。
+
+![image-20220603081254916](https://img-blog.csdnimg.cn/img_convert/29490513de0655455a898203be6cc36b.png)
+
+> 用【前缀+本月(yyyyMM))+用户id 】作为键，这样就可以表示每个月的签到情况了
+
+```java
+@Override
+public Result sign() {
+    // 1.获取当前登录用户
+    Long userId = UserHolder.getUser().getId();
+    // 2.获取日期
+    LocalDateTime now = LocalDateTime.now();
+    // 3.拼接key
+    String keySuffix = now.format(DateTimeFormatter.ofPattern(":yyyyMM"));
+    String key = USER_SIGN_KEY + userId + keySuffix;
+    // 4.获取今天是本月的第几天
+    int dayOfMonth = now.getDayOfMonth();
+    // 5.写入Redis SETBIT key offset 1
+    stringRedisTemplate.opsForValue().setBit(key, dayOfMonth - 1, true);
+    return Result.ok();
+}
+```
+
+
+
+### 连续签到天数统计
+
+**问题1：**什么叫做连续签到天数？ 从最后一次签到开始向前统计，直到遇到第一次未签到为止，计算总的签到次数，就是连续签到天数。
+
+![img](https://img-blog.csdnimg.cn/a690c16e9ec44ba48b38617b8358ee80.png)
+
+ 
+
+Java逻辑代码：获得当前这个月的最后一次签到数据，定义一个计数器，然后不停的向前统计，直到获得第一个非0的数字即可，每得到一个非0的数字计数器+1，直到遍历完所有的数据，就可以获得当前月的签到总天数了
+
+**问题2：**如何得到本月到今天为止的所有签到数据？
+
+BITFIELD key GET u[dayOfMonth] 0
+
+假设今天是10号，那么我们就可以从当前月的第一天开始，获得到当前这一天的位数，是10号，那么就是10位，去拿这段时间的数据，就能拿到所有的数据了，那么这10天里边签到了多少次呢？统计有多少个1即可。
+
+
+
+**问题3：如何从后向前遍历每个bit位？**
+
+注意：bitMap返回的数据是10进制，哪假如说返回一个数字8，那么我哪儿知道到底哪些是0，哪些是1呢？我们只需要让得到的10进制数字和1做与运算就可以了，因为1只有遇见1 才是1，其他数字都是0 ，我们把签到结果和1进行与操作，每与一次，就把签到结果向右移动一位，依次内推，我们就能完成逐个遍历的效果了。
+
+![image-20220603081538391](https://img-blog.csdnimg.cn/img_convert/3987ebdf9c31c9ea89d0237e71faf63d.png)
+
+需求：实现下面接口，统计当前用户截止当前时间在本月的连续签到天数
+
+有用户有时间我们就可以组织出对应的key，此时就能找到这个用户截止这天的所有签到记录，再根据这套算法，就能统计出来他连续签到的次数了
+
+![](https://img-blog.csdnimg.cn/92366124c44c4620ac40506903101376.png)
+
+```java
+@Override
+    public Result signCount() {
+        // 1.获取当前登录用户
+        Long userId = 1010L;//UserHolder.getUser().getId();
+        // 2.获取日期
+        LocalDateTime now = LocalDateTime.now();
+        // 3.拼接key
+        String keySuffix = now.format(DateTimeFormatter.ofPattern(":yyyyMM"));
+        String key = USER_SIGN_KEY + userId + keySuffix;
+        // 4.获取今天是本月的第几天
+        int dayOfMonth = now.getDayOfMonth();
+        // 5.获取本月截止今天为止的所有的签到记录，返回的是一个十进制的数字 BITFIELD sign:5:202203 GET u14 0
+        List<Long> result = stringRedisTemplate.opsForValue().bitField(
+                key,
+                BitFieldSubCommands.create()
+                        .get(BitFieldSubCommands.BitFieldType.unsigned(dayOfMonth)).valueAt(0)
+        );
+        if (result == null || result.isEmpty()) {
+            // 没有任何签到结果
+            return Result.ok(0);
+        }
+        Long num = result.get(0);
+        if (num == null || num == 0) {
+            return Result.ok(0);
+        }
+        // 6.循环遍历
+        int count = 0;
+        while (true) {
+            // 6.1.让这个数字与1做与运算，得到数字的最后一个bit位  // 判断这个bit位是否为0
+            if ((num & 1) == 0) {
+                // 如果为0，说明未签到，结束
+                break;
+            }else {
+                // 如果不为0，说明已签到，计数器+1
+                count++;
+            }
+            // 把数字右移一位，抛弃最后一个bit位，继续下一个bit位
+            num >>>= 1;
+        }
+        return Result.ok(count);
+    }
+```
+
+
+
+## 12、UV统计
+
+### **UV统计-HyperLogLog**
+
+首先搞懂两个概念：
+
+- UV：全称Unique Visitor，也叫独立访客量，是指通过互联网访问、浏览这个网页的自然人。1天内同一个用户多次访问该网站，只记录1次。
+- PV：全称Page View，也叫页面访问量或点击量，用户每访问网站的一个页面，记录1次PV，用户多次打开页面，则记录多次PV。往往用来衡量网站的流量。
+
+通常来说UV会比PV大很多，所以衡量同一个网站的访问量，我们需要综合考虑很多因素，所以我们只是单纯的把这两个值作为一个参考值
+
+UV统计在服务端做会比较麻烦，因为要判断该用户是否已经统计过了，需要将统计过的用户信息保存。但是如果每个访问的用户都保存到Redis中，数据量会非常恐怖，那怎么处理呢？
+
+Hyperloglog(HLL)是从Loglog算法派生的概率算法，用于确定非常大的集合的基数，而不需要存储其所有值。相关算法原理大家可以参考：[HyperLogLog 算法的原理讲解以及 Redis 是如何应用它的 - 掘金](https://juejin.cn/post/6844903785744056333#heading-0) Redis中的HLL是基于string结构实现的，单个HLL的内存**永远小于16kb**，**内存占用低**的令人发指！作为代价，其测量结果是概率性的，**有小于0.81％的误差**。不过对于UV统计来说，这完全可以忽略。
+
+![img](https://img-blog.csdnimg.cn/c5aebdb28989481abda62c5bb8a5b819.png)
+
+### UV统计-测试百万数据的统计
+
+测试思路：我们直接利用单元测试，向HyperLogLog中添加100万条数据，看看内存占用和统计效果如何![img](https://img-blog.csdnimg.cn/105765e86ecb4114bdb92f2d2528f235.png)
 
